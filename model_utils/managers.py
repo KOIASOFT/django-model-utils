@@ -461,15 +461,17 @@ class JoinQueryset(models.QuerySet[Any]):
             # if we give a qs we need to keep the model qs to not lose anything
             new_qs = self
         else:
-            fk_column = 'id'
-            qs = self.only(fk_column)
-            new_qs = self.model._default_manager.all()
+            model: models.Model = self.model
+            fk_column = model._meta.pk.column
+            to_field = model._meta.pk.name
+            qs = self.only(to_field)
+            new_qs = model._default_manager.all()
 
         TABLE_NAME = 'temp_stuff'
         query, params = qs.query.sql_with_params()
         sql = '''
             DROP TABLE IF EXISTS {table_name};
-            DROP INDEX IF EXISTS {table_name}_id;
+            DROP INDEX IF EXISTS {table_name}_{fk_column};
             CREATE TEMPORARY TABLE {table_name} AS {query};
             CREATE INDEX {table_name}_{fk_column} ON {table_name} ({fk_column});
         '''.format(table_name=TABLE_NAME, fk_column=fk_column, query=str(query))
