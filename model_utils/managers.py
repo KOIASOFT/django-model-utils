@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 import warnings
 from typing import TYPE_CHECKING, Any, Generic, Sequence, TypeVar, cast, overload
 
@@ -64,7 +65,6 @@ else:
 
 
 class InheritanceQuerySetMixin(Generic[ModelT]):
-
     model: type[ModelT]
     subclasses: Sequence[str]
 
@@ -142,9 +142,9 @@ class InheritanceQuerySetMixin(Generic[ModelT]):
         rels = [
             rel for rel in related_objects
             if isinstance(rel.field, OneToOneField)
-            and issubclass(rel.field.model, model)
-            and model is not rel.field.model
-            and rel.parent_link
+               and issubclass(rel.field.model, model)
+               and model is not rel.field.model
+               and rel.parent_link
         ]
 
         subclasses = []
@@ -425,7 +425,7 @@ class SoftDeletableManager(SoftDeletableManagerMixin[ModelT], models.Manager[Mod
 
 class JoinQueryset(models.QuerySet[Any]):
 
-    def join(self, qs: QuerySet[Any] | None = None) -> QuerySet[Any]:
+    def join(self, qs: QuerySet[Any] | None = None, table_name='temp_stuff', extra_fields=None) -> QuerySet[Any]:
         '''
         Join one queryset together with another using a temporary table. If
         no queryset is used, it will use the current queryset and join that
@@ -467,36 +467,40 @@ class JoinQueryset(models.QuerySet[Any]):
             qs = self.only(to_field)
             new_qs = model._default_manager.all()
 
-        TABLE_NAME = 'temp_stuff'
         query, params = qs.query.sql_with_params()
         sql = '''
             DROP TABLE IF EXISTS {table_name};
             DROP INDEX IF EXISTS {table_name}_{fk_column};
             CREATE TEMPORARY TABLE {table_name} AS {query};
             CREATE INDEX {table_name}_{fk_column} ON {table_name} ({fk_column});
-        '''.format(table_name=TABLE_NAME, fk_column=fk_column, query=str(query))
+        '''.format(table_name=table_name, fk_column=fk_column, query=str(query))
 
         with connection.cursor() as cursor:
             cursor.execute(sql, params)
 
-        class TempModel(models.Model):
-            temp_key = models.ForeignKey(
+        class Meta:
+            managed = False
+            db_table = table_name
+
+        model_name = "".join(s.capitalize() for s in table_name.split('_'))
+        TempModel = type(model_name, (models.Model,), {
+            '__module__': __name__,
+            'temp_key': models.ForeignKey(
                 self.model,
                 on_delete=models.DO_NOTHING,
                 db_column=fk_column,
-                to_field=to_field
-            )
-
-            class Meta:
-                managed = False
-                db_table = TABLE_NAME
-
+                to_field=to_field,
+                related_name=table_name,
+            ),
+            'Meta': Meta,
+            **(extra_fields or {})
+        })
         conn = Join(
             table_name=TempModel._meta.db_table,
             parent_alias=new_qs.query.get_initial_alias(),
             table_alias=None,
             join_type='INNER JOIN',
-            join_field=self.model.tempmodel_set.rel,
+            join_field=getattr(self.model, table_name).rel,
             nullable=False
         )
         new_qs.query.join(conn, reuse=None)
@@ -521,6 +525,7 @@ if not TYPE_CHECKING:
                 DeprecationWarning
             )
             return self._queryset_class(model=self.model, using=self._db)
+
 
     class JoinManager(JoinManagerMixin):
         pass
